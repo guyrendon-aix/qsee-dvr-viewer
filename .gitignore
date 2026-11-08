@@ -6,5 +6,6 @@ dvr_config.json
 dist/
 build/
 *.spec
+!qseedvr.spec
 server.log
 .DS_Store

@@ -1,0 +1,183 @@
+name: Build desktop packages
+
+# Linux  -> standalone single-file binary (qseedvr-<ver>-linux-x86_64.tar.gz)
+# macOS  -> drag-to-Applications .dmg, one per architecture (arm64 + Intel)
+#
+# Every push / PR builds and smoke-tests the packages. Pushing a tag like v1.2.0
+# also publishes them to a GitHub Release.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  PYINSTALLER_VERSION: "6.22.3"
+
+jobs:
+  linux:
+    name: Linux binary (x86_64)
+    # Oldest supported Ubuntu image = oldest glibc the binary depends on (2.35), so it
+    # runs on Ubuntu 22.04+, Debian 12+, Fedora 36+ and similar.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev.${GITHUB_SHA::7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "pyinstaller==${PYINSTALLER_VERSION}"
+
+      - name: Build
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
+        run: pyinstaller qseedvr.spec --noconfirm --clean
+
+      - name: Smoke test
+        run: |
+          export DVR_CONFIG="$RUNNER_TEMP/smoke/dvr_config.json"
+          ./dist/qseedvr --no-browser --port 8765 > "$RUNNER_TEMP/smoke.log" 2>&1 &
+          pid=$!
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8765/api/health && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/login)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/api/status)" = 401
+          test -f "$DVR_CONFIG"
+          kill $pid
+        # Prints the server log if anything above failed.
+      - if: failure()
+        run: cat "$RUNNER_TEMP/smoke.log" || true
+
+      - name: Package
+        id: pkg
+        run: |
+          name="qseedvr-${{ steps.ver.outputs.version }}-linux-x86_64"
+          # tar keeps the executable bit, which upload-artifact's zip would drop.
+          tar -C dist -czf "$name.tar.gz" qseedvr
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: |
+            ${{ steps.pkg.outputs.name }}.tar.gz
+            ${{ steps.pkg.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+
+  macos:
+    name: macOS dmg (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14        # Apple Silicon
+            arch: arm64
+          - runner: macos-15-intel  # Intel (macos-13 was retired Dec 2025)
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev.${GITHUB_SHA::7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "pyinstaller==${PYINSTALLER_VERSION}"
+
+      - name: Build app bundle
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
+        run: pyinstaller qseedvr.spec --noconfirm --clean
+
+      - name: Seal bundle (ad-hoc signature)
+        run: |
+          APP="dist/QSee DVR Viewer.app"
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Smoke test
+        run: |
+          export DVR_CONFIG="$RUNNER_TEMP/smoke/dvr_config.json"
+          "dist/QSee DVR Viewer.app/Contents/MacOS/QSeeDVR" --no-browser --port 8765 &
+          pid=$!
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8765/api/health && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/login)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/api/status)" = 401
+          test -f "$DVR_CONFIG"
+          kill $pid
+        # The .app logs to a file instead of stdout; show it if the smoke test failed.
+      - if: failure()
+        run: cat "$HOME/Library/Application Support/QSeeDVR/qseedvr.log" || true
+
+      - name: Create dmg
+        id: pkg
+        run: |
+          name="QSeeDVR-${{ steps.ver.outputs.version }}-macos-${{ matrix.arch }}"
+          staging="$RUNNER_TEMP/dmg"
+          mkdir -p "$staging"
+          cp -R "dist/QSee DVR Viewer.app" "$staging/"
+          ln -s /Applications "$staging/Applications"   # drag-to-install target
+          hdiutil create -volname "QSee DVR Viewer" -srcfolder "$staging" -fs HFS+ \
+                         -format UDZO -imagekey zlib-level=9 -ov "$name.dmg"
+          hdiutil verify "$name.dmg"
+          shasum -a 256 "$name.dmg" > "$name.dmg.sha256"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: |
+            ${{ steps.pkg.outputs.name }}.dmg
+            ${{ steps.pkg.outputs.name }}.dmg.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

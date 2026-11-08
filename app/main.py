@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -42,8 +43,23 @@ from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa
 from app import auth  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_PATH = Path(os.environ.get("DVR_CONFIG", BASE_DIR / "dvr_config.json"))
-STATIC_DIR = BASE_DIR / "static"
+# PyInstaller builds: bundled files (static/) live in the unpack dir (sys._MEIPASS), which
+# is temporary/read-only, so the config must live in a per-user data directory instead.
+FROZEN = bool(getattr(sys, "frozen", False))
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
+STATIC_DIR = RESOURCE_DIR / "static"
+
+
+def user_data_dir() -> Path:
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "QSeeDVR"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "QSeeDVR"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "qseedvr"
+
+
+CONFIG_PATH = Path(os.environ.get("DVR_CONFIG") or (user_data_dir() if FROZEN else BASE_DIR) / "dvr_config.json")
+CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 NUM_CHANNELS = 8
 SUB, MAIN = 1, 0
