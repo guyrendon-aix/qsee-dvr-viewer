@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DVR Monitor · Sign in</title>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>tailwind.config = { darkMode: 'class' };</script>
+  <style>body { background: #0b0d10; }</style>
+</head>
+<body class="flex min-h-screen items-center justify-center p-4 text-slate-200 antialiased">
+  <main class="w-full max-w-sm">
+    <div class="mb-6 flex items-center justify-center gap-2">
+      <svg class="h-7 w-7 text-sky-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 10l4.55-2.28A1 1 0 0121 8.62v6.76a1 1 0 01-1.45.9L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+      <h1 class="text-xl font-semibold tracking-tight">DVR Monitor</h1>
+    </div>
+    <form id="loginForm" class="space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
+      <h2 class="text-sm font-medium text-slate-400">Sign in to view your cameras</h2>
+      <label class="block text-sm">Username
+        <input name="username" autocomplete="username" required autofocus
+               class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 outline-none focus:border-sky-500" /></label>
+      <label class="block text-sm">Password
+        <input name="password" type="password" autocomplete="current-password" required
+               class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 outline-none focus:border-sky-500" /></label>
+      <p id="error" role="alert" class="hidden rounded-md bg-rose-950 px-3 py-2 text-sm text-rose-300"></p>
+      <button id="submit" type="submit"
+              class="w-full rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-60">Sign in</button>
+    </form>
+  </main>
+<script>
+const form = document.getElementById('loginForm'), err = document.getElementById('error'), btn = document.getElementById('submit');
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  btn.disabled = true; btn.textContent = 'Signing in…'; err.classList.add('hidden');
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ username: form.username.value.trim(), password: form.password.value }),
+    });
+    if (r.ok) { location.replace('/'); return; }
+    const data = await r.json().catch(() => ({}));
+    throw new Error(data.detail || `Sign-in failed (${r.status})`);
+  } catch (ex) {
+    err.textContent = ex.message === 'Failed to fetch' ? 'Server unreachable' : ex.message;
+    err.classList.remove('hidden');
+    form.password.value = ''; form.password.focus();
+  } finally { btn.disabled = false; btn.textContent = 'Sign in'; }
+});
+</script>
+</body>
+</html>

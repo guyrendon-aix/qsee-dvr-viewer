@@ -1,0 +1,59 @@
+{
+  "dvr_ip": "192.168.5.11",
+  "rtsp_port": 554,
+  "username": "guy",
+  "password": "2962",
+  "path_template": "/cam/realmonitor?channel={channel}&subtype={subtype}",
+  "grid_fps": 5,
+  "jpeg_quality": 75,
+  "channels": [
+    {
+      "id": 1,
+      "name": "Camera 1",
+      "enabled": true
+    },
+    {
+      "id": 2,
+      "name": "Camera 2",
+      "enabled": true
+    },
+    {
+      "id": 3,
+      "name": "Camera 3",
+      "enabled": true
+    },
+    {
+      "id": 4,
+      "name": "Camera 4",
+      "enabled": true
+    },
+    {
+      "id": 5,
+      "name": "Camera 5",
+      "enabled": false
+    },
+    {
+      "id": 6,
+      "name": "Camera 6",
+      "enabled": false
+    },
+    {
+      "id": 7,
+      "name": "Camera 7",
+      "enabled": false
+    },
+    {
+      "id": 8,
+      "name": "Camera 8",
+      "enabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "password_hash": "scrypt$16384$8$1$1jnGte2p9NHF0y3D3iTMCw==$1w6tswG5cd1rxHj7pq2yJdZfIOYL6SKcKU6bbya4axw=",
+      "role": "admin",
+      "must_change_password": false
+    }
+  ]
+}

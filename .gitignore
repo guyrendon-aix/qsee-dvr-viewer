@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+app/__pycache__/
+.env
+dvr_config.json
+dist/
+build/
+*.spec
+server.log
+.DS_Store
