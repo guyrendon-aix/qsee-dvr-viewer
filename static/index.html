@@ -52,6 +52,45 @@
       <button onclick="openSettings()" class="rounded-md bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500">Enable channels in Settings</button>
     </div>
     <p id="hint" class="mt-4 text-center text-xs text-slate-500">Click a camera to open the HD main stream. Esc closes.</p>
+
+    <!-- HDD playback search -->
+    <section id="playback" class="mx-auto mt-8 max-w-3xl rounded-lg border border-slate-800 bg-slate-900/60 p-4 sm:p-5">
+      <h2 class="text-base font-semibold text-slate-100">Recorded Playback</h2>
+      <p class="mt-1 text-xs text-slate-500">Look up a recording on the DVR's hard drive by channel and time range. Times are in the DVR's local clock.</p>
+      <form id="pbForm" class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1.4fr)]">
+        <label class="text-sm">Channel
+          <select id="pbChannel" name="channel" class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2"></select></label>
+        <label class="text-sm">Start
+          <input id="pbStart" name="start" type="datetime-local" step="1" required class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 [color-scheme:dark]" /></label>
+        <label class="text-sm">End
+          <input id="pbEnd" name="end" type="datetime-local" step="1" required class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 [color-scheme:dark]" /></label>
+        <div class="sm:col-span-3">
+          <button id="pbSubmit" type="submit" class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50">Search &amp; Playback</button>
+        </div>
+      </form>
+      <p id="pbMsg" class="mt-3 hidden rounded-md px-3 py-2 text-sm"></p>
+      <div id="pbResult" class="mt-4 hidden space-y-3 border-t border-slate-800 pt-4">
+        <div id="pbPlayer" class="relative overflow-hidden rounded-lg border border-slate-800 bg-black aspect-video">
+          <img id="pbImg" alt="Recorded playback" class="h-full w-full object-contain" />
+          <span id="pbBadge" class="absolute left-2 top-2 rounded bg-amber-500/90 px-1.5 py-0.5 text-[11px] font-bold tracking-wide text-black">PLAYBACK</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <button id="pbPlay" type="button" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-600 text-white hover:bg-sky-500" title="Pause (Space)" aria-label="Pause">
+            <svg id="pbIconPause" class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
+            <svg id="pbIconPlay" class="hidden h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg>
+          </button>
+          <input id="pbSeek" type="range" min="0" max="1" step="1" value="0" aria-label="Seek" class="min-w-0 flex-1 cursor-pointer accent-sky-500" />
+          <span id="pbTime" class="shrink-0 font-mono text-xs text-slate-400"></span>
+          <button id="pbFs" type="button" class="shrink-0 rounded-md bg-slate-800 px-2.5 py-1.5 text-sm hover:bg-slate-700" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+        </div>
+        <p id="pbState" class="text-xs text-slate-500"></p>
+        <div id="pbCopyRow" class="hidden flex-wrap items-center gap-2">
+          <button id="pbCopy" type="button" class="rounded-md bg-slate-800 px-3 py-1.5 text-sm hover:bg-slate-700" title="RTSP URI with password, for VLC">Copy RTSP link</button>
+          <input id="pbUrl" readonly aria-label="RTSP playback URI" class="hidden min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 font-mono text-xs" />
+        </div>
+        <dl id="pbMeta" class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3"></dl>
+      </div>
+    </section>
   </main>
 
   <!-- Enlarged view -->
@@ -113,6 +152,10 @@
             <input name="grid_fps" type="number" min="1" max="30" class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2" /></label>
           <label class="text-sm">JPEG quality
             <input name="jpeg_quality" type="number" min="30" max="95" class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2" /></label>
+          <label class="sm:col-span-3 flex items-start gap-2 text-sm">
+            <input name="playback_copy_link" type="checkbox" class="mt-0.5 accent-sky-500" />
+            <span>Show "Copy RTSP link" in Recorded Playback
+              <span class="block text-xs text-slate-500">Admins only. The link contains the DVR password, for opening recordings in VLC.</span></span></label>
         </section>
         <section>
           <h3 class="mb-2 text-sm font-medium text-slate-300">Channels</h3>
@@ -322,7 +365,22 @@ async function refreshStatus() {
 // subtype=0 (HD) RTSP session. Until the first HD frame arrives the backend serves the cached
 // subtype=1 frame, so the picture appears instantly. Closing the viewer drops the connection
 // and the backend tears down the HD session immediately; the grid stays on subtype=1.
-let viewerStatusTimer = null;
+// Camera status (dots, "6/8 online", resolution/fps) is polled slowly: every 10 s on the grid,
+// every 3 s while the HD viewer is open, and not at all while the tab is hidden (it refreshes
+// as soon as the tab is shown again). Video frames are separate and follow the Grid FPS setting.
+const STATUS_INTERVAL = 10000, VIEWER_STATUS_INTERVAL = 3000;
+let statusTimer = 0;
+function scheduleStatus() {
+  clearTimeout(statusTimer);
+  if (document.hidden) return;
+  statusTimer = setTimeout(async () => { await refreshStatus(); scheduleStatus(); },
+                           viewerCh !== null ? VIEWER_STATUS_INTERVAL : STATUS_INTERVAL);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { clearTimeout(statusTimer); return; }
+  refreshStatus();
+  scheduleStatus();
+});
 
 function updateViewerMeta() {
   if (viewerCh === null) return;
@@ -343,8 +401,7 @@ function openViewer(ch) {
   $('#viewer').classList.replace('hidden', 'flex');
   document.body.style.overflow = 'hidden';
   setViewerSource();
-  clearInterval(viewerStatusTimer);          // faster status while open so the HD badge flips promptly
-  viewerStatusTimer = setInterval(refreshStatus, 1000);
+  scheduleStatus();                          // faster status while open so the HD badge flips promptly
   $('#closeViewer').focus();
 }
 function setViewerSource() {
@@ -364,10 +421,10 @@ function closeViewer() {
   $('#viewerImg').removeAttribute('src');
   $('#viewer').classList.replace('flex', 'hidden');
   document.body.style.overflow = '';
-  clearInterval(viewerStatusTimer);
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   const ch = viewerCh;
   viewerCh = null;
+  scheduleStatus();                          // back to the slow grid interval
   tiles[ch]?.root.focus?.();
 }
 function toggleBrowserFullscreen() {
@@ -427,6 +484,7 @@ $('#btnLogout').onclick = logout;
 // ---------- settings ----------
 async function loadConfig() {
   config = await apiJson('/api/config');
+  fillPlaybackChannels();
   buildGrid();
   startPolling();
 }
@@ -448,6 +506,7 @@ function fillDvrForm() {
   const f = $('#settingsForm');
   for (const k of ['dvr_ip', 'rtsp_port', 'username', 'path_template', 'grid_fps', 'jpeg_quality']) f.elements[k].value = config[k];
   f.elements.password.value = '';
+  f.elements.playback_copy_link.checked = !!config.playback_copy_link;
   $('#pwHint').textContent = config.has_password ? 'A password is saved. Leave blank to keep it.' : 'No password saved.';
   $('#chanRows').innerHTML = config.channels.map(c => `
     <div class="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5">
@@ -570,6 +629,7 @@ $('#settingsForm').addEventListener('submit', async (e) => {
     path_template: f.elements.path_template.value.trim(),
     grid_fps: +f.elements.grid_fps.value,
     jpeg_quality: +f.elements.jpeg_quality.value,
+    playback_copy_link: f.elements.playback_copy_link.checked,
     channels: Array.from({ length: N }, (_, i) => ({
       id: i + 1,
       name: $(`[data-ch="${i + 1}"][data-k="name"]`).value.trim(),
@@ -597,6 +657,183 @@ $('#settings').addEventListener('click', e => { if (e.target.id === 'settings') 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+// ---------- recorded playback ----------
+// The recording plays as MJPEG in an <img>, like the live tiles. MJPEG can't seek or pause,
+// so the server restarts the DVR stream instead: seeking opens a stream starting at the chosen
+// moment; pausing freezes the current frame and closes the stream (no DVR connection held);
+// resuming opens a stream at the paused position. Clearing the <img> src closes a stream.
+const pad = n => String(n).padStart(2, '0');
+const toLocalInput = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+const toApi = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+// datetime-local gives "YYYY-MM-DDTHH:MM" or "...:SS"; the API wants "YYYY-MM-DD HH:MM:SS".
+const toApiTime = v => { const [d, t] = v.split('T'); return `${d} ${t.length === 5 ? t + ':00' : t.slice(0, 8)}`; };
+const fromApi = s => new Date(s.replace(' ', 'T'));                 // parsed as local (DVR) time
+const fmtDuration = s => [Math.floor(s / 3600), Math.floor(s % 3600 / 60), s % 60].map(pad).join(':');
+const fmtClock = d => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+const pb = {
+  meta: null,        // last search result
+  sid: null,         // id of the current stream
+  offset: 0,         // seconds from the search start where the current stream began
+  pos: 0,            // current position, seconds from the search start
+  state: 'idle',     // idle | connecting | playing | paused | ended | none
+  dragging: false,
+  timer: 0,
+  frameUrl: null,    // object URL of the frozen frame shown while paused
+  fullUrl: null,     // RTSP link for "Copy" (admins, when enabled in Settings)
+};
+const newSid = () => (crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')).replace(/[^A-Za-z0-9_-]/g, '');
+
+function setImg(src) {
+  const img = $('#pbImg');
+  if (src) img.src = src; else img.removeAttribute('src');
+  if (pb.frameUrl && src !== pb.frameUrl) { URL.revokeObjectURL(pb.frameUrl); pb.frameUrl = null; }
+}
+
+function renderPlayer() {
+  const m = pb.meta; if (!m) return;
+  const dur = m.duration_seconds, start = fromApi(m.start_time);
+  const seek = $('#pbSeek');
+  seek.max = dur;
+  if (!pb.dragging) seek.value = Math.min(pb.pos, dur);
+  const shown = pb.dragging ? +seek.value : pb.pos;
+  $('#pbTime').textContent = `${fmtClock(new Date(start.getTime() + shown * 1000))} / ${fmtClock(fromApi(m.end_time))}`;
+  const playing = pb.state === 'playing' || pb.state === 'connecting';
+  $('#pbIconPause').classList.toggle('hidden', !playing);
+  $('#pbIconPlay').classList.toggle('hidden', playing);
+  const label = playing ? 'Pause' : pb.state === 'ended' ? 'Play again' : 'Play';
+  $('#pbPlay').title = label + ' (Space)';
+  $('#pbPlay').setAttribute('aria-label', label);
+  $('#pbState').textContent = { connecting: 'Connecting to the DVR...', paused: 'Paused - the DVR connection is closed until you resume.',
+    ended: 'End of recording.', none: 'No recording found from this point. Try another time or channel.' }[pb.state] || '';
+}
+
+function stopPolling() { clearInterval(pb.timer); pb.timer = 0; }
+async function pollStatus() {
+  const sid = pb.sid;
+  let s;
+  try { s = await apiJson('/api/playback/status?sid=' + sid); } catch { return; }
+  if (sid !== pb.sid || pb.state === 'paused') return;           // superseded by a seek / pause
+  if (s.status === 'playing' || s.status === 'connecting') {
+    pb.state = s.status;
+    pb.pos = Math.min(pb.offset + s.position, pb.meta.duration_seconds);
+  } else if (s.status === 'ended') {
+    pb.state = 'ended'; pb.pos = pb.meta.duration_seconds; stopPolling();
+  } else if (s.status === 'no_recording') {
+    pb.state = 'none'; stopPolling();
+  }
+  renderPlayer();
+}
+
+// Start (or restart) playback `offset` seconds after the search start.
+function playFrom(offset) {
+  const m = pb.meta; if (!m) return;
+  offset = Math.max(0, Math.min(Math.floor(offset), m.duration_seconds - 1));
+  pb.sid = newSid(); pb.offset = offset; pb.pos = offset; pb.state = 'connecting';
+  const q = new URLSearchParams({ channel: m.channel, start_time: toApi(new Date(fromApi(m.start_time).getTime() + offset * 1000)),
+                                  end_time: m.end_time, sid: pb.sid });
+  setImg('/api/playback/stream?' + q);          // replaces (and so closes) any previous stream
+  stopPolling();
+  pb.timer = setInterval(pollStatus, 1000);
+  renderPlayer();
+}
+
+async function pausePlayback() {
+  if (pb.state !== 'playing' && pb.state !== 'connecting') return;
+  const sid = pb.sid;
+  pb.state = 'paused'; stopPolling(); renderPlayer();
+  try {                                          // freeze the current frame before closing the stream
+    const r = await api('/api/playback/frame?sid=' + sid);
+    if (r.ok && sid === pb.sid) {
+      pb.frameUrl = URL.createObjectURL(await r.blob());
+      setImg(pb.frameUrl);
+      return;
+    }
+  } catch {}
+  if (sid === pb.sid) setImg(null);
+}
+
+function togglePlay() {
+  if (!pb.meta) return;
+  if (pb.state === 'playing' || pb.state === 'connecting') pausePlayback();
+  else playFrom(pb.state === 'ended' || pb.state === 'none' ? 0 : pb.pos);
+}
+
+function closePlayback() {                       // new search / leaving the page
+  stopPolling(); pb.sid = null; pb.state = 'idle'; setImg(null);
+}
+
+function fillPlaybackChannels() {
+  const sel = $('#pbChannel'), keep = sel.value;
+  sel.innerHTML = '';
+  for (let ch = 1; ch <= N; ch++) {
+    const c = config?.channels?.find(x => x.id === ch);
+    sel.add(new Option(`${ch} - ${c?.name || 'Camera ' + ch}`, ch));
+  }
+  if (keep) sel.value = keep;
+}
+function initPlaybackTimes() {
+  const now = new Date(); now.setMilliseconds(0);
+  $('#pbEnd').value = toLocalInput(now);
+  $('#pbStart').value = toLocalInput(new Date(now - 3600e3));   // default: the last hour
+}
+
+$('#pbForm').onsubmit = async e => {
+  e.preventDefault();
+  const msg = $('#pbMsg'), btn = $('#pbSubmit');
+  msg.classList.add('hidden');
+  const start = $('#pbStart').value, end = $('#pbEnd').value;
+  if (end <= start) { showMsg(msg, 'End time must be after the start time.', false); return; }
+  btn.disabled = true;
+  try {
+    const d = await apiJson('/api/playback/stream-url', { method: 'POST', body: JSON.stringify({
+      channel: +$('#pbChannel').value, start_time: toApiTime(start), end_time: toApiTime(end) }) });
+    closePlayback();
+    pb.meta = d;
+    pb.fullUrl = d.credentials_included ? d.playback_rtsp_url : null;
+    $('#pbCopyRow').classList.toggle('hidden', !pb.fullUrl);
+    $('#pbCopyRow').classList.toggle('flex', !!pb.fullUrl);
+    $('#pbUrl').classList.add('hidden');
+    $('#pbCopy').textContent = 'Copy RTSP link';
+    const rows = [['Channel', `${d.channel} - ${d.channel_name}`], ['Start', d.start_time], ['End', d.end_time],
+                  ['Duration', fmtDuration(d.duration_seconds)], ['DVR', `${d.dvr_ip}:${d.rtsp_port}`], ['Stream', 'Main (HD, subtype 0)']];
+    $('#pbMeta').innerHTML = rows.map(([k, v]) =>
+      `<div><dt class="text-xs text-slate-500">${k}</dt><dd class="font-mono text-slate-200">${escapeHtml(v)}</dd></div>`).join('');
+    $('#pbResult').classList.remove('hidden');
+    playFrom(0);
+  } catch (err) {
+    showMsg(msg, err.message, false);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+$('#pbPlay').onclick = togglePlay;
+$('#pbSeek').addEventListener('input', () => { pb.dragging = true; renderPlayer(); });
+$('#pbSeek').addEventListener('change', e => { pb.dragging = false; playFrom(+e.target.value); });
+$('#pbFs').onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else $('#pbPlayer').requestFullscreen?.().catch(() => {});
+};
+// Space toggles play/pause when the playback panel has focus (not while typing in a field).
+$('#playback').addEventListener('keydown', e => {
+  if (e.key === ' ' && pb.meta && !['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName)) { e.preventDefault(); togglePlay(); }
+});
+$('#pbCopy').onclick = async () => {
+  if (!pb.fullUrl) return;
+  try {
+    await navigator.clipboard.writeText(pb.fullUrl);   // only available on https or localhost
+    $('#pbCopy').textContent = 'Copied';
+  } catch {
+    // Plain-http LAN access has no clipboard API: show the full URI selected for Ctrl+C.
+    const inp = $('#pbUrl');
+    inp.value = pb.fullUrl; inp.classList.remove('hidden'); inp.focus(); inp.select();
+    $('#pbCopy').textContent = 'Press Ctrl+C';
+  }
+};
+// Leaving the page must close the DVR playback session too.
+window.addEventListener('pagehide', closePlayback);
+
 $('#layout').onchange = e => { localSet('layout', e.target.value); applyLayout(); };
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { if (!$('#settings').classList.contains('hidden')) closeSettings(); else if (viewerCh !== null) closeViewer(); }
@@ -613,9 +850,10 @@ async function init() {
   $('#whoName').textContent = me.username;
   $('#whoRole').textContent = me.role;            // badge shows from lg breakpoint up (lg:flex)
   if (me.must_change_password) return forcePasswordChange();
+  initPlaybackTimes();
   await loadConfig();
   refreshStatus();
-  setInterval(refreshStatus, 3000);
+  scheduleStatus();
 }
 init();
 </script>

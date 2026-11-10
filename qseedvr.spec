@@ -22,7 +22,7 @@ PLIST_VERSION = _m.group(0) if _m else "0.0.0"
 
 # uvicorn picks its event loop / HTTP protocol / logging classes by import string at runtime,
 # so static analysis can't see them.
-hiddenimports = collect_submodules("uvicorn") + ["app.auth"]
+hiddenimports = collect_submodules("uvicorn") + ["app.auth", "app.routers.playback"]
 
 a = Analysis(
     ["launcher.py"],

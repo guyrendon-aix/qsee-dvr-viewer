@@ -5,7 +5,8 @@
   "password": "2962",
   "path_template": "/cam/realmonitor?channel={channel}&subtype={subtype}",
   "grid_fps": 5,
-  "jpeg_quality": 75,
+  "jpeg_quality": 90,
+  "playback_copy_link": false,
   "channels": [
     {
       "id": 1,

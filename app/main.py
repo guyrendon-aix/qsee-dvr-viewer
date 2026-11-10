@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
 from app import auth  # noqa: E402
+from app.routers import playback  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 # PyInstaller builds: bundled files (static/) live in the unpack dir (sys._MEIPASS), which
@@ -100,6 +101,8 @@ class DVRConfig(BaseModel):
     path_template: str = "/cam/realmonitor?channel={channel}&subtype={subtype}"
     grid_fps: int = Field(default=5, ge=1, le=30)
     jpeg_quality: int = Field(default=75, ge=30, le=95)
+    # Recorded playback: offer admins a "Copy RTSP link" button (the link includes the DVR password).
+    playback_copy_link: bool = False
     channels: list[ChannelConfig] = Field(
         default_factory=lambda: [ChannelConfig(id=i, name=f"Camera {i}") for i in range(1, NUM_CHANNELS + 1)]
     )
@@ -139,6 +142,7 @@ class ConfigUpdate(BaseModel):
     path_template: str
     grid_fps: int = Field(ge=1, le=30)
     jpeg_quality: int = Field(ge=30, le=95)
+    playback_copy_link: bool = False
     channels: list[ChannelConfig]
 
 
@@ -529,6 +533,9 @@ def require_admin(ctx: AuthContext = Depends(require_user)) -> AuthContext:
     if ctx.user.role != "admin":
         raise HTTPException(403, "Administrator access required")
     return ctx
+
+
+app.include_router(playback.create_router(lambda: manager.cfg, require_user, placeholder_jpeg))
 
 
 @app.exception_handler(StarletteHTTPException)

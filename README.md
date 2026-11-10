@@ -65,6 +65,21 @@ If you prefer running or developing the application locally from source:
    ```
    Open your browser and navigate to `http://127.0.0.1:8000`. Log in using the default credentials (`admin` / `admin`).
 
+5. **Run 24/7 with the Guardian Watchdog (optional):**
+   `run_guard.py` starts the server on `0.0.0.0:8000` (reachable from your LAN) and automatically restarts it 3 seconds after any crash or unexpected exit.
+   ```bash
+   # On Windows PowerShell:
+   .\venv\Scripts\python.exe run_guard.py
+   # On macOS/Linux:
+   venv/bin/python run_guard.py
+   ```
+   Restart events are timestamped in the console and in `run_guard.log`. Press `Ctrl+C` to stop the guard and the server cleanly.
+
+   The guard doesn't poll. It sleeps until the server exits, then waits `GUARD_RESTART_DELAY` seconds (default `3`, allowed `1`–`300`) before restarting. If the server keeps failing right after starting, the wait doubles each time up to 60 seconds, and resets once the server stays up. To change the delay, copy `.env.example` to `.env` and set it there, or set it as an environment variable, which takes precedence:
+   ```bash
+   GUARD_RESTART_DELAY=5
+   ``` Make sure nothing else is already using port 8000. LAN mode is for trusted networks only, so don't forward the port to the internet.
+
 ---
 
 ## 📦 Automated Desktop Builds (GitHub Actions)

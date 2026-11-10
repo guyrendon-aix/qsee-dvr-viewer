@@ -9,3 +9,4 @@ build/
 !qseedvr.spec
 server.log
 .DS_Store
+run_guard.log
